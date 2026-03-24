@@ -1,0 +1,7 @@
+{
+  "name": "Arne - Voice Assistant",
+  "description": "A futuristic voice assistant for Friedrich Elsholtz, powered by Gemini Live API.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
