@@ -48,6 +48,10 @@ export class AudioProcessor {
       this.audioContext = new AudioContext({ sampleRate: this.outputSampleRate });
     }
 
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume();
+    }
+
     const arrayBuffer = this.base64ToArrayBuffer(base64);
     const int16Array = new Int16Array(arrayBuffer);
     this.playbackQueue.push(int16Array);
@@ -67,6 +71,11 @@ export class AudioProcessor {
     const data = this.playbackQueue.shift()!;
     const float32Data = this.int16ToFloat32(data);
     
+    if (float32Data.length === 0) {
+      this.processPlaybackQueue();
+      return;
+    }
+
     const buffer = this.audioContext.createBuffer(1, float32Data.length, this.outputSampleRate);
     buffer.getChannelData(0).set(float32Data);
     
@@ -109,7 +118,8 @@ export class AudioProcessor {
   }
 
   private base64ToArrayBuffer(base64: string): ArrayBuffer {
-    const binaryString = window.atob(base64);
+    const normalizedBase64 = base64.replace(/-/g, '+').replace(/_/g, '/');
+    const binaryString = window.atob(normalizedBase64);
     const len = binaryString.length;
     const bytes = new Uint8Array(len);
     for (let i = 0; i < len; i++) {

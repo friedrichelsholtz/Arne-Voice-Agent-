@@ -79,19 +79,25 @@ export default function App() {
     setStatus('connecting');
     setTranscript("");
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
-      audioProcessorRef.current = new AudioProcessor((base64) => {
-        if (!isMuted) {
+      let sessionPromise: Promise<any>;
+
+      const processor = new AudioProcessor((base64) => {
+        if (!isMuted && sessionPromise) {
           sessionPromise.then(s => {
             s.sendRealtimeInput({
               audio: { data: base64, mimeType: 'audio/pcm;rate=16000' }
             });
-          });
+          }).catch(e => console.error("Audio send error:", e));
         }
       });
+      audioProcessorRef.current = processor;
+      
+      // Start capture immediately to respect user gesture and get mic permission
+      await processor.startCapture();
 
-      const sessionPromise = ai.live.connect({
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      
+      sessionPromise = ai.live.connect({
         model: "gemini-2.5-flash-native-audio-preview-12-2025",
         config: {
           responseModalities: [Modality.AUDIO],
@@ -104,28 +110,38 @@ export default function App() {
           onopen: () => {
             setStatus('active');
             setIsLive(true);
-            audioProcessorRef.current?.startCapture();
-            // Trigger initial greeting using promise to avoid race condition
-            sessionPromise.then(s => s.sendRealtimeInput({ text: "Please introduce yourself as instructed." }));
+            // Trigger initial greeting using proper clientContent format
+            sessionPromise.then(s => {
+              s.send({
+                clientContent: {
+                  turns: [{ role: 'user', parts: [{ text: "Hello, please introduce yourself." }] }],
+                  turnComplete: true
+                }
+              });
+            }).catch(e => console.error("Initial message error:", e));
           },
           onmessage: async (message) => {
-            if (message.serverContent?.modelTurn?.parts) {
-              const audioPart = message.serverContent.modelTurn.parts.find(p => p.inlineData);
-              if (audioPart?.inlineData?.data) {
-                setIsSpeaking(true);
-                audioProcessorRef.current?.playAudio(audioPart.inlineData.data);
+            try {
+              if (message.serverContent?.modelTurn?.parts) {
+                const audioPart = message.serverContent.modelTurn.parts.find(p => p.inlineData);
+                if (audioPart?.inlineData?.data) {
+                  setIsSpeaking(true);
+                  audioProcessorRef.current?.playAudio(audioPart.inlineData.data);
+                }
+                const textPart = message.serverContent.modelTurn.parts.find(p => p.text);
+                if (textPart?.text) {
+                  setTranscript(prev => prev + " " + textPart.text);
+                }
               }
-              const textPart = message.serverContent.modelTurn.parts.find(p => p.text);
-              if (textPart?.text) {
-                setTranscript(prev => prev + " " + textPart.text);
+              if (message.serverContent?.interrupted) {
+                audioProcessorRef.current?.clearPlayback();
+                setIsSpeaking(false);
               }
-            }
-            if (message.serverContent?.interrupted) {
-              audioProcessorRef.current?.clearPlayback();
-              setIsSpeaking(false);
-            }
-            if (message.serverContent?.turnComplete) {
-              setIsSpeaking(false);
+              if (message.serverContent?.turnComplete) {
+                setIsSpeaking(false);
+              }
+            } catch (e) {
+              console.error("Error processing message:", e);
             }
           },
           onclose: () => {
@@ -136,6 +152,7 @@ export default function App() {
           onerror: (err) => {
             console.error("Live API Error:", err);
             setStatus('error');
+            audioProcessorRef.current?.stopCapture();
           }
         }
       });
@@ -144,6 +161,7 @@ export default function App() {
     } catch (error) {
       console.error("Failed to start session:", error);
       setStatus('error');
+      audioProcessorRef.current?.stopCapture();
     }
   }, [status, isMuted]);
 
